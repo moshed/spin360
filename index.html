@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>COBY CETW526 — 360 Spin</title>
+<style>
+  :root { --bg:#fff; --fg:#111; --muted:#777; --line:#e3e3e3; --accent:#111; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#141414; --fg:#f2f2f2; --muted:#999; --line:#2e2e2e; --accent:#f2f2f2; }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+         font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+         display:flex; flex-direction:column; align-items:center; padding:24px 16px 48px; }
+  h1 { font-size:19px; font-weight:600; margin:0 0 4px; }
+  .sub { color:var(--muted); font-size:13px; margin:0 0 20px; }
+
+  #stage { position:relative; width:min(520px,92vw); aspect-ratio:1/1;
+           border:1px solid var(--line); border-radius:14px; overflow:hidden;
+           background:#fff; cursor:grab; touch-action:none; user-select:none; }
+  #stage.dragging { cursor:grabbing; }
+  #stage img { position:absolute; inset:0; width:100%; height:100%;
+               object-fit:contain; display:none; -webkit-user-drag:none; }
+  #stage img.on { display:block; }
+
+  #hint { position:absolute; left:50%; bottom:12px; transform:translateX(-50%);
+          background:rgba(0,0,0,.62); color:#fff; font-size:12px;
+          padding:5px 12px; border-radius:20px; pointer-events:none;
+          transition:opacity .35s; }
+  #hint.hide { opacity:0; }
+
+  #load { position:absolute; inset:0; display:flex; align-items:center;
+          justify-content:center; background:#fff; color:#666; font-size:13px; }
+
+  .row { display:flex; flex-wrap:wrap; gap:8px; justify-content:center;
+         margin-top:18px; width:min(520px,92vw); }
+  button { font:inherit; font-size:13px; padding:7px 14px; border-radius:8px;
+           border:1px solid var(--line); background:transparent; color:var(--fg);
+           cursor:pointer; }
+  button.sel { background:var(--accent); color:var(--bg); border-color:var(--accent); }
+  .lbl { font-size:11px; letter-spacing:.08em; text-transform:uppercase;
+         color:var(--muted); width:100%; text-align:center; margin-top:12px; }
+
+  #warn { width:min(520px,92vw); margin-top:20px; font-size:13px; color:var(--muted);
+          border-top:1px solid var(--line); padding-top:14px; }
+  #warn b { color:var(--fg); }
+</style>
+</head>
+<body>
+
+<h1>COBY CETW526 — 360° Spin</h1>
+<p class="sub">Drag left / right to rotate. Built from your video + GIF.</p>
+
+<div id="stage">
+  <div id="load">loading frames…</div>
+  <div id="hint">↔ drag to spin</div>
+</div>
+
+<div class="lbl">Source</div>
+<div class="row">
+  <button id="bSmooth" class="sel">Smooth &mdash; from video (38 steps, 640px)</button>
+  <button id="bCrisp">Crisp &mdash; from GIF (7 steps, 900px)</button>
+</div>
+
+<div class="lbl">Rotation</div>
+<div class="row">
+  <button id="bFull" class="sel">360° full spin</button>
+  <button id="bHalf">180° real only (back &amp; forth)</button>
+</div>
+
+<div class="lbl">Playback</div>
+<div class="row">
+  <button id="bAuto">Auto-spin: off</button>
+</div>
+
+<div id="warn">
+  <b>Note on the 360° spin:</b> the source footage only covers 180° (front → side → back).
+  The other half is a mirror of it, so the <b>COBY logo reads backwards</b> for part of the turn.
+  Switch to “180° real only” to see just the genuine frames. A full 360° turntable shoot
+  (or the factory’s complete frame set) fixes this properly.
+</div>
+
+<script>
+const SETS = {
+  smooth: { dir:'smooth', prefix:'s_', total:74, half:38 },
+  crisp:  { dir:'crisp',  prefix:'c_', total:12, half:7  }
+};
+
+const stage = document.getElementById('stage');
+const loadEl = document.getElementById('load');
+const hint = document.getElementById('hint');
+
+let set = 'smooth';
+let mode = 'full';        // 'full' = continuous 360°, 'half' = ping-pong over the real 180°
+let auto = false;
+let turn = 0;             // position in revolutions (float, unbounded)
+let imgs = {};            // set -> array of <img>
+
+function pad(n){ return String(n).padStart(3,'0'); }
+
+function loadSet(name){
+  return new Promise(res => {
+    if (imgs[name]) return res();
+    const s = SETS[name], arr = [], done = [];
+    for (let i = 0; i < s.total; i++){
+      const im = new Image();
+      im.src = `${s.dir}/${s.prefix}${pad(i)}.jpg`;
+      im.alt = '';
+      stage.appendChild(im);
+      arr.push(im);
+      done.push(new Promise(r => { im.onload = r; im.onerror = r; }));
+    }
+    imgs[name] = arr;
+    Promise.all(done).then(res);
+  });
+}
+
+function activeLen(){
+  return mode === 'full' ? SETS[set].total : SETS[set].half;
+}
+
+// `turn` is measured in revolutions, so switching source or mode keeps the
+// object pointing the same way instead of jumping.
+function frameIndex(){
+  const n = activeLen();
+  if (mode === 'full'){
+    return ((Math.round(turn * n) % n) + n) % n;   // wraps forever, both directions
+  }
+  const span = 2 * (n - 1);                        // there and back = one "turn"
+  const q = ((Math.round(turn * span) % span) + span) % span;
+  return q < n ? q : span - q;
+}
+
+function draw(){
+  const arr = imgs[set];
+  if (!arr) return;
+  const idx = frameIndex();
+  for (const [k, list] of Object.entries(imgs)){
+    list.forEach((im, i) => im.classList.toggle('on', k === set && i === idx));
+  }
+}
+
+// ---- drag ----
+// Dragging one stage-width = exactly one full revolution. Drag right and the
+// front face travels right, which means walking backwards down the sequence.
+let dragging = false, lastX = 0;
+
+function down(x){ dragging = true; lastX = x; stage.classList.add('dragging'); hint.classList.add('hide'); }
+function move(x){
+  if (!dragging) return;
+  turn -= (x - lastX) / stage.clientWidth;
+  lastX = x;
+  draw();
+}
+function up(){ dragging = false; stage.classList.remove('dragging'); }
+
+stage.addEventListener('pointerdown', e => { stage.setPointerCapture(e.pointerId); down(e.clientX); });
+stage.addEventListener('pointermove', e => move(e.clientX));
+stage.addEventListener('pointerup', up);
+stage.addEventListener('pointercancel', up);
+stage.addEventListener('dragstart', e => e.preventDefault());
+
+// ---- auto spin ----
+let raf = null;
+function tick(){
+  if (!auto){ raf = null; return; }
+  if (!dragging){ turn += 1 / 260; draw(); }   // ~4.3s per revolution at 60fps
+  raf = requestAnimationFrame(tick);
+}
+
+// ---- controls ----
+function pick(id, others){
+  document.getElementById(id).classList.add('sel');
+  others.forEach(o => document.getElementById(o).classList.remove('sel'));
+}
+
+document.getElementById('bSmooth').onclick = async () => {
+  set = 'smooth'; pick('bSmooth', ['bCrisp']); await loadSet('smooth'); draw();
+};
+document.getElementById('bCrisp').onclick = async () => {
+  loadEl.style.display = 'flex';
+  set = 'crisp'; pick('bCrisp', ['bSmooth']);
+  await loadSet('crisp'); loadEl.style.display = 'none'; draw();
+};
+document.getElementById('bHalf').onclick = () => { mode = 'half'; pick('bHalf', ['bFull']); draw(); };
+document.getElementById('bFull').onclick = () => { mode = 'full'; pick('bFull', ['bHalf']); draw(); };
+
+const bAuto = document.getElementById('bAuto');
+bAuto.onclick = () => {
+  auto = !auto;
+  bAuto.textContent = 'Auto-spin: ' + (auto ? 'on' : 'off');
+  bAuto.classList.toggle('sel', auto);
+  if (auto && !raf) raf = requestAnimationFrame(tick);
+};
+
+loadSet('smooth').then(() => { loadEl.style.display = 'none'; draw(); });
+setTimeout(() => hint.classList.add('hide'), 4000);
+</script>
+</body>
+</html>
